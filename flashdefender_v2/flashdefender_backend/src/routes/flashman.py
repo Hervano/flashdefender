@@ -4,7 +4,19 @@ import base64
 import time
 from datetime import datetime
 
-flashman_bp = Blueprint('flashman', __name__)
+flashman_bp = Blueprint("flashman", __name__)
+
+# Lista de DNS seguros/públicos
+SECURE_PUBLIC_DNS = [
+    "8.8.8.8", "8.8.4.4",  # Google
+    "1.1.1.1", "1.0.0.1",  # Cloudflare
+    "9.9.9.9", "149.112.112.112",  # Quad9
+    "208.67.222.222", "208.67.220.220",  # OpenDNS
+    "76.76.2.0", "76.76.10.0",  # Controle D
+    "94.140.14.14", "94.140.15.15",  # AdGuard DNS
+    "185.228.168.9", "185.228.169.9",  # CleanBrowsing
+    "76.76.19.19", "76.223.122.150"  # Alternate DNS
+]
 
 def create_auth_header(username, password):
     """Cria o header de autenticação Basic Auth em base64"""
@@ -27,14 +39,14 @@ def get_all_devices(flashman_url, auth_header):
             response = requests.get(
                 f"{flashman_url}/api/v3/device/search/",
                 headers={
-                    'accept': 'application/json',
-                    'Authorization': auth_header
+                    "accept": "application/json",
+                    "Authorization": auth_header
                 },
                 params={
-                    'online': 'true',
-                    'fields': '_id',
-                    'page': page,
-                    'pageLimit': page_limit
+                    "online": "true",
+                    "fields": "_id",
+                    "page": page,
+                    "pageLimit": page_limit
                 },
                 timeout=30
             )
@@ -48,11 +60,11 @@ def get_all_devices(flashman_url, auth_header):
             data = response.json()
             print(f"Dados recebidos: {data}")
             
-            if not data.get('success'):
-                print(f"API retornou success=false: {data.get('message', 'Sem mensagem')}")
+            if not data.get("success"):
+                print(f"API retornou success=false: {data.get("message", "Sem mensagem")}")
                 break
                 
-            devices_in_page = data.get('devices', [])
+            devices_in_page = data.get("devices", [])
             print(f"Dispositivos encontrados na página {page}: {len(devices_in_page)}")
             
             if not devices_in_page:
@@ -80,15 +92,15 @@ def get_device_dns(flashman_url, auth_header, device_id):
     """Obtém os DNS atuais de um equipamento"""
     try:
         # URL encode do MAC address
-        encoded_mac = device_id.replace(':', '%3A')
+        encoded_mac = device_id.replace(":", "%3A")
         
         print(f"Obtendo DNS do dispositivo: {device_id}")
         
         response = requests.get(
             f"{flashman_url}/api/v3/device/mac/{encoded_mac}/lan-dns-servers",
             headers={
-                'accept': 'application/json',
-                'Authorization': auth_header
+                "accept": "application/json",
+                "Authorization": auth_header
             },
             timeout=30
         )
@@ -98,8 +110,8 @@ def get_device_dns(flashman_url, auth_header, device_id):
         if response.status_code == 200:
             data = response.json()
             print(f"Dados DNS {device_id}: {data}")
-            if data.get('success'):
-                return data.get('lan_dns_servers_list', [])
+            if data.get("success"):
+                return data.get("lan_dns_servers_list", [])
         
         print(f"Falha ao obter DNS de {device_id}: {response.text}")
         return None
@@ -112,19 +124,19 @@ def update_device_dns(flashman_url, auth_header, device_id, new_dns_list):
     """Atualiza os DNS de um equipamento"""
     try:
         # URL encode do MAC address
-        encoded_mac = device_id.replace(':', '%3A')
+        encoded_mac = device_id.replace(":", "%3A")
         
         print(f"Atualizando DNS do dispositivo {device_id} para: {new_dns_list}")
         
         response = requests.put(
             f"{flashman_url}/api/v3/device/mac/{encoded_mac}/lan-dns-servers",
             headers={
-                'accept': 'application/json',
-                'Authorization': auth_header,
-                'Content-Type': 'application/json'
+                "accept": "application/json",
+                "Authorization": auth_header,
+                "Content-Type": "application/json"
             },
             json={
-                'lan_dns_servers_list': new_dns_list
+                "lan_dns_servers_list": new_dns_list
             },
             timeout=30
         )
@@ -134,7 +146,7 @@ def update_device_dns(flashman_url, auth_header, device_id, new_dns_list):
         if response.status_code == 200:
             data = response.json()
             print(f"Resultado atualização {device_id}: {data}")
-            return data.get('success', False)
+            return data.get("success", False)
         
         print(f"Falha ao atualizar DNS de {device_id}: {response.text}")
         return False
@@ -143,40 +155,45 @@ def update_device_dns(flashman_url, auth_header, device_id, new_dns_list):
         print(f"Erro ao atualizar DNS do dispositivo {device_id}: {e}")
         return False
 
-def has_suspicious_dns(current_dns, dns_to_delete):
-    """Verifica se o equipamento possui DNS suspeito"""
-    if not current_dns or not dns_to_delete:
-        return False
+def filter_dns_list(current_dns, dns_to_remove):
+    """Remove os DNS especificados da lista atual de DNS"""
+    if not current_dns or not dns_to_remove:
+        return current_dns
     
-    suspicious_dns_list = [dns.strip() for dns in dns_to_delete.split(',')]
-    print(f"DNS suspeitos configurados: {suspicious_dns_list}")
+    remove_set = set(dns.strip() for dns in dns_to_remove.split(","))
+    filtered_dns = [dns for dns in current_dns if dns.strip() not in remove_set]
+    
+    print(f"DNS a serem removidos: {remove_set}")
     print(f"DNS atuais do equipamento: {current_dns}")
+    print(f"DNS filtrados: {filtered_dns}")
     
-    for dns in current_dns:
-        if dns.strip() in suspicious_dns_list:
-            print(f"DNS suspeito encontrado: {dns}")
-            return True
-    
-    print("Nenhum DNS suspeito encontrado")
-    return False
+    return filtered_dns
 
-@flashman_bp.route('/test-connection', methods=['POST'])
+def get_insecure_dns(current_dns):
+    """Identifica DNS que não estão na lista de DNS seguros/públicos"""
+    insecure_dns = []
+    for dns in current_dns:
+        if dns.strip() not in SECURE_PUBLIC_DNS:
+            insecure_dns.append(dns.strip())
+    return insecure_dns
+
+@flashman_bp.route("/test-connection", methods=["POST"])
 def test_connection():
     """Testa a conexão com a API Flashman"""
     try:
         data = request.get_json()
-        flashman_url = data.get('flashman_url')
-        username = data.get('username')
-        password = data.get('password')
+        flashman_url = data.get("flashman_url")
+        username = data.get("username")
+        password = data.get("password")
         
         if not all([flashman_url, username, password]):
             return jsonify({
-                'success': False,
-                'message': 'URL do Flashman, usuário e senha são obrigatórios'
+                "success": False,
+                "message": "URL do Flashman, usuário e senha são obrigatórios"
             }), 400
         
         # Remove barra final se existir
-        flashman_url = flashman_url.rstrip('/')
+        flashman_url = flashman_url.rstrip("/")
         
         # Cria header de autenticação
         auth_header = create_auth_header(username, password)
@@ -187,14 +204,14 @@ def test_connection():
         response = requests.get(
             f"{flashman_url}/api/v3/device/search/",
             headers={
-                'accept': 'application/json',
-                'Authorization': auth_header
+                "accept": "application/json",
+                "Authorization": auth_header
             },
             params={
-                'online': 'true',
-                'fields': '_id',
-                'page': 1,
-                'pageLimit': 1
+                "online": "true",
+                "fields": "_id",
+                "page": 1,
+                "pageLimit": 1
             },
             timeout=30
         )
@@ -204,69 +221,69 @@ def test_connection():
         
         if response.status_code == 200:
             data = response.json()
-            if data.get('success'):
+            if data.get("success"):
                 # Busca o total de dispositivos
                 devices = get_all_devices(flashman_url, auth_header)
                 return jsonify({
-                    'success': True,
-                    'message': f'Conexão estabelecida com sucesso!',
-                    'total_devices': len(devices)
+                    "success": True,
+                    "message": f"Conexão estabelecida com sucesso!",
+                    "total_devices": len(devices)
                 })
         
         return jsonify({
-            'success': False,
-            'message': 'Falha na autenticação ou conexão com a API'
+            "success": False,
+            "message": "Falha na autenticação ou conexão com a API"
         }), 401
         
     except requests.exceptions.Timeout:
         return jsonify({
-            'success': False,
-            'message': 'Timeout na conexão com a API'
+            "success": False,
+            "message": "Timeout na conexão com a API"
         }), 408
         
     except requests.exceptions.ConnectionError:
         return jsonify({
-            'success': False,
-            'message': 'Erro de conexão com a API'
+            "success": False,
+            "message": "Erro de conexão com a API"
         }), 503
         
     except Exception as e:
         print(f"Erro no teste de conexão: {e}")
         return jsonify({
-            'success': False,
-            'message': f'Erro interno: {str(e)}'
+            "success": False,
+            "message": f"Erro interno: {str(e)}"
         }), 500
 
-@flashman_bp.route('/process-dns', methods=['POST'])
+@flashman_bp.route("/process-dns", methods=["POST"])
 def process_dns():
     """Processa a alteração de DNS nos equipamentos com nova lógica de categorização"""
     try:
         data = request.get_json()
-        flashman_url = data.get('flashman_url')
-        username = data.get('username')
-        password = data.get('password')
-        default_dns = data.get('default_dns')
-        dns_to_delete = data.get('dns_to_delete')
+        flashman_url = data.get("flashman_url")
+        username = data.get("username")
+        password = data.get("password")
+        default_dns = data.get("default_dns")
+        dns_to_delete = data.get("dns_to_delete") # Este campo agora é opcional
         
         print(f"Iniciando processamento DNS")
         print(f"URL: {flashman_url}")
         print(f"DNS padrão: {default_dns}")
-        print(f"DNS para deletar: {dns_to_delete}")
+        print(f"DNS para deletar (opcional): {dns_to_delete}")
         
-        if not all([flashman_url, username, password, default_dns, dns_to_delete]):
+        if not all([flashman_url, username, password, default_dns]):
             return jsonify({
-                'success': False,
-                'error': 'Todos os campos são obrigatórios'
+                "success": False,
+                "error": "URL do Flashman, usuário, senha e DNS padrão são obrigatórios"
             }), 400
         
         # Remove barra final se existir
-        flashman_url = flashman_url.rstrip('/')
+        flashman_url = flashman_url.rstrip("/")
         
         # Cria header de autenticação
         auth_header = create_auth_header(username, password)
         
         # Prepara lista de DNS padrão
-        default_dns_list = [dns.strip() for dns in default_dns.split(',')]
+        default_dns_list = [dns.strip() for dns in default_dns.split(",")]
         print(f"Lista DNS padrão: {default_dns_list}")
         
         # Coleta todos os equipamentos
@@ -275,8 +292,8 @@ def process_dns():
         if not devices:
             print("Nenhum dispositivo encontrado!")
             return jsonify({
-                'success': False,
-                'error': 'Nenhum equipamento encontrado'
+                "success": False,
+                "error": "Nenhum equipamento encontrado"
             }), 404
         
         print(f"Processando {len(devices)} dispositivos")
@@ -290,7 +307,7 @@ def process_dns():
         
         # Processa cada equipamento
         for i, device in enumerate(devices):
-            device_id = device.get('_id')
+            device_id = device.get("_id")
             if not device_id:
                 print(f"Dispositivo {i+1} sem ID, pulando")
                 continue
@@ -305,45 +322,60 @@ def process_dns():
                     # Erro ao obter DNS
                     print(f"Erro ao obter DNS de {device_id}")
                     failed_devices.append({
-                        'device_id': device_id,
-                        'old_dns': [],
-                        'new_dns': [],
-                        'error': 'Erro ao obter DNS atual'
+                        "device_id": device_id,
+                        "old_dns": [],
+                        "new_dns": [],
+                        "error": "Erro ao obter DNS atual"
                     })
                     continue
                 
-                # Verifica se possui DNS suspeito
-                if not has_suspicious_dns(current_dns, dns_to_delete):
-                    # Rede Segura - não possui DNS suspeito
-                    print(f"Dispositivo {device_id} já é seguro")
+                # Identifica DNS inseguros/privados
+                insecure_dns_found = get_insecure_dns(current_dns)
+                
+                # Combina DNS inseguros encontrados com os DNS a serem removidos (se fornecidos)
+                all_dns_to_remove = set(insecure_dns_found)
+                if dns_to_delete:
+                    all_dns_to_remove.update(dns.strip() for dns in dns_to_delete.split(","))
+                
+                # Filtra os DNS a serem removidos da lista atual
+                filtered_current_dns = [dns for dns in current_dns if dns.strip() not in all_dns_to_remove]
+                
+                # Verifica se houve alguma mudança após a filtragem
+                if set(filtered_current_dns) == set(current_dns):
+                    # Rede Segura - não possui DNS suspeito ou os DNS suspeitos não foram encontrados
+                    print(f"Dispositivo {device_id} já é seguro ou não possui DNS para remover")
                     safe_devices.append({
-                        'device_id': device_id,
-                        'old_dns': current_dns,
-                        'new_dns': current_dns,
-                        'message': 'Equipamento já possui DNS seguro'
+                        "device_id": device_id,
+                        "old_dns": current_dns,
+                        "new_dns": current_dns,
+                        "message": "Equipamento já possui DNS seguro ou não possui DNS para remover"
                     })
                 else:
-                    # Possui DNS suspeito, tenta alterar
-                    print(f"Dispositivo {device_id} possui DNS suspeito, tentando alterar")
-                    success = update_device_dns(flashman_url, auth_header, device_id, default_dns_list)
+                    # Houve mudança, tenta atualizar o DNS
+                    print(f"Dispositivo {device_id} possui DNS para remover, tentando alterar")
+                    
+                    # Combina os DNS filtrados com os DNS padrão
+                    final_dns_list = list(set(filtered_current_dns + default_dns_list))
+                    
+                    success = update_device_dns(flashman_url, auth_header, device_id, final_dns_list)
                     
                     if success:
                         # OK - DNS alterado com sucesso
                         print(f"DNS de {device_id} alterado com sucesso")
                         success_devices.append({
-                            'device_id': device_id,
-                            'old_dns': current_dns,
-                            'new_dns': default_dns_list,
-                            'message': 'DNS alterado com sucesso'
+                            "device_id": device_id,
+                            "old_dns": current_dns,
+                            "new_dns": final_dns_list,
+                            "message": "DNS alterado com sucesso"
                         })
                     else:
                         # Falha - não conseguiu alterar DNS
                         print(f"Falha ao alterar DNS de {device_id}")
                         failed_devices.append({
-                            'device_id': device_id,
-                            'old_dns': current_dns,
-                            'new_dns': [],
-                            'error': 'Falha ao alterar DNS'
+                            "device_id": device_id,
+                            "old_dns": current_dns,
+                            "new_dns": [],
+                            "error": "Falha ao alterar DNS"
                         })
                 
                 # Pequena pausa para não sobrecarregar a API
@@ -352,10 +384,10 @@ def process_dns():
             except Exception as e:
                 print(f"Erro no processamento de {device_id}: {e}")
                 failed_devices.append({
-                    'device_id': device_id,
-                    'old_dns': [],
-                    'new_dns': [],
-                    'error': f'Erro no processamento: {str(e)}'
+                    "device_id": device_id,
+                    "old_dns": [],
+                    "new_dns": [],
+                    "error": f"Erro no processamento: {str(e)}"
                 })
         
         end_time = datetime.now()
@@ -366,25 +398,24 @@ def process_dns():
         print(f"- Falhas: {len(failed_devices)}")
         
         return jsonify({
-            'success': True,
-            'message': 'Processamento concluído',
-            'start_time': start_time.strftime('%d/%m/%Y %H:%M:%S'),
-            'end_time': end_time.strftime('%d/%m/%Y %H:%M:%S'),
-            'total_devices': len(devices),
-            'safe': safe_devices,
-            'success': success_devices,
-            'failures': failed_devices,
-            'summary': {
-                'safe_count': len(safe_devices),
-                'success_count': len(success_devices),
-                'failures_count': len(failed_devices)
+            "success": True,
+            "message": "Processamento concluído",
+            "start_time": start_time.strftime("%d/%m/%Y %H:%M:%S"),
+            "end_time": end_time.strftime("%d/%m/%Y %H:%M:%S"),
+            "total_devices": len(devices),
+            "safe": safe_devices,
+            "success": success_devices,
+            "failures": failed_devices,
+            "summary": {
+                "safe_count": len(safe_devices),
+                "success_count": len(success_devices),
+                "failures_count": len(failed_devices)
             }
         })
         
     except Exception as e:
         print(f"Erro geral no processamento: {e}")
         return jsonify({
-            'success': False,
-            'error': f'Erro interno: {str(e)}'
+            "success": False,
+            "error": f"Erro interno: {str(e)}"
         }), 500
-
